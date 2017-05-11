@@ -5,6 +5,8 @@ $HOME/.lcsim/lcsim.db
 import os
 import sqlite3
 import hashlib
+import pandas as pd
+import sqlalchemy as sq
 
 
 def split_textfile_line(text_line):
@@ -42,8 +44,11 @@ class SIMLIBReader():
         if not os.path.exists(home_dir + '/.lcsim'):
             os.mkdir(home_dir + '/.lcsim')
 
-        self.conn = sqlite3.connect(home_dir + '/.lcsim/lcsim.db')
+        lcsim_db_path = home_dir + '/.lcsim/lcsim.db'
+        self.conn = sqlite3.connect(lcsim_db_path)
         self.cur = self.conn.cursor()
+
+        self.sqlalchemy_engine = sq.create_engine('sqlite:////'+lcsim_db_path)
 
         self._ccd_field = [0, 'C0']
         self._source = [0, 0, 'n', 0, 0, 0, 0, 0, 0, 0, 0]
@@ -227,3 +232,57 @@ class SIMLIBReader():
                     self.cur.execute(query.format(insert_values))
 
         self.conn.commit()
+
+    def get_obslog(self, field, ccd, band=None, min_mjd=None, max_mjd=None):
+        """
+        Get the observing log from the cached SIMLIB file
+
+        Properties
+        ----------
+        field : str
+            Name of the observing field
+
+        ccd : int
+            CCD number, must be provided as each CCD has a different set of
+            observation log parameters.
+
+        band : str, optional
+            Name of an observed filter. If specified the observing log will be
+            returned only for this band.
+
+        min_mjd : float, optional
+            Lower limit for the returned MJD, can be used to create light
+            curves that are shorter than the full duration of the survey
+
+        max_mjd : float, optional
+            Max limit for the returned MJD, can be used to create light
+            curves that are shorter than the full duration of the survey
+
+        Returns
+        -------
+        obslog : Pandas.DataFrame
+            `Pandas.DataFrame` returning the observation logs.
+        """
+        query = """\
+            SELECT * FROM {} WHERE field="{}" AND ccd={} {} {} {}
+        """
+        band_str = ""
+        min_mjd_str = ""
+        max_mjd_str = ""
+
+        if band is not None:
+            band_str = 'AND flt="' + str(band) + '"'
+
+        if min_mjd is not None:
+            min_mjd_str = 'AND mjd>' + str(min_mjd)
+
+        if max_mjd is not None:
+            max_mjd_str = 'AND mjd<' + str(max_mjd)
+
+        query = query.format(self.simlib_table,
+                             field,
+                             ccd,
+                             band_str,
+                             min_mjd_str,
+                             max_mjd_str)
+        return pd.read_sql_query(query, self.sqlalchemy_engine)

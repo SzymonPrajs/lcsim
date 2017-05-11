@@ -90,3 +90,4 @@ ENV/
 
 # Temporary test files
 test.py
+*.prof
