@@ -38,7 +38,7 @@ class LCSim():
         sqskyerr_pe = area_bg*(self.simlib['skysigs'] * self.simlib['gain'])**2
         sqccderr_pe = area_bg * self.simlib['noise']**2
 
-        template_sqskyerr_pe = area_bg * (self.simlib['skysigs'] *
+        template_sqskyerr_pe = area_bg * (self.simlib['skysigt'] *
                                           self.simlib['gain'])**2
         zfac = 10.0**(0.8*(self.simlib['zps'] - self.simlib['zpt']))
         template_sqskyerr_pe *= zfac
@@ -47,7 +47,7 @@ class LCSim():
         sqsum = flux_pe + sqskyerr_pe + sqccderr_pe
         self.flux_pe_err = np.sqrt(sqsum)
 
-        return flux_pe / self.flux_pe_err
+        return flux_pe, self.flux_pe_err
 
     def scale_fluxerr_model(self):
         SPol = {
@@ -65,7 +65,7 @@ class LCSim():
         }
 
         field = self.simlib['field'].values[0]
-        band = self.simlib['band'].values[0]
+        band = self.simlib['flt'].values[0]
         if field == 'C3' or field == 'X3':
             Pol = DPol
         else:
@@ -84,7 +84,7 @@ class LCSim():
         flux_adu_errS = self.flux_pe_err / self.simlib['gain']
         template_adu_err = self.template_pe_err / self.simlib['gain']
 
-        relerr = 10.0**(0.4*self.simlib['zps']) - 1.0
+        relerr = 10.0**(0.4*self.simlib['sigzps']) - 1.0
         err1 = flux_adu_errS
         err2 = self.flux_adu * relerr
         flux_adu_errSZ = np.sqrt(err1**2 + err2**2)
@@ -127,3 +127,4 @@ class LCSim():
         self.simlib = simlib
 
         self.compute_statistical_error()
+        return self.smear_generated_mag()

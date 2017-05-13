@@ -6,6 +6,7 @@ import os
 import sqlite3
 import hashlib
 import pandas as pd
+import numpy as np
 import sqlalchemy as sq
 
 
@@ -171,6 +172,7 @@ class SIMLIBReader():
 
         elif key == 'S':
             self._source = value
+            self._source[6] = np.round(float(self._source[6])*np.pi/2, 2)
 
     def create_current_simlib_table(self):
         """
