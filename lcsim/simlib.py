@@ -176,7 +176,9 @@ class SIMLIBReader():
 
     def create_current_simlib_table(self):
         """
-        Remove duplicated entried in thhe lcsim.db table
+        Remove duplicated entried in the lcsim.db table then set an index on
+        the new table to improve query performance and finally remove the
+        temporary table.
         """
         query = """\
         CREATE TABLE IF NOT EXISTS {} AS
@@ -200,6 +202,13 @@ class SIMLIBReader():
             GROUP BY ccd, field, idexpt, flt
         """
         self.cur.execute(query.format(self.simlib_table))
+        self.conn.commit()
+
+        index = """
+        CREATE INDEX search_query
+            ON {}(field, ccd, mjd, flt)
+        """
+        self.cur.execute(index.format(self.simlib_table))
         self.conn.commit()
 
         self.cur.execute("DROP TABLE IF EXISTS temp")
