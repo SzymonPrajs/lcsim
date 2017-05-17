@@ -26,7 +26,7 @@ class SIMLIBReader():
     """
     Read SNANA's SIMLIB files and store their contents in a SQLite database
 
-    Properties
+    Parameters
     ----------
     simlib_file : str, optional
         Path to a SNANA SIMLIB file. If the file has already been cached
@@ -79,7 +79,7 @@ class SIMLIBReader():
         """
         Setup a SIMLIB table in the lcsim.db SQLite database
 
-        Properties
+        Parameters
         ----------
         table_name : str
             Name of the new SIMLIB data table
@@ -147,7 +147,7 @@ class SIMLIBReader():
         Based on the input key and value update the class wide variables that
         will eventually be pushed to the lcsim.db database file
 
-        Properties
+        Parameters
         ----------
         key : str
             SNANA SIMLIB key value
@@ -248,7 +248,7 @@ class SIMLIBReader():
         """
         Get the observing log from the cached SIMLIB file
 
-        Properties
+        Parameters
         ----------
         field : str
             Name of the observing field

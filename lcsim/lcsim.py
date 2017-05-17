@@ -9,7 +9,7 @@ class LCSim():
     """
     Simulate light curve noise and smearing based on SIMLIBReader output
 
-    Properties
+    Parameters
     ----------
     seed : int, optional
         Seed for random number generators used thoughout the class
