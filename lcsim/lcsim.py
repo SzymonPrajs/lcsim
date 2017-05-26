@@ -30,7 +30,6 @@ class LCSim():
                      2.5*np.log10(self.simlib['gain']) - 27.5)
         self.pe_over_fluxcal = 10**(0.4*zptdif_pe)
 
-        self.flux_adu = 10.0**(0.4 * (self.simlib['zps'] - self.genmag))
         flux_pe = self.flux_adu * self.simlib['gain']
 
         area_bg = 4.0 * np.pi * self.simlib['psf1']**2
@@ -44,7 +43,7 @@ class LCSim():
         template_sqskyerr_pe *= zfac
         self.template_pe_err = np.sqrt(template_sqskyerr_pe)
 
-        sqsum = flux_pe + sqskyerr_pe + sqccderr_pe
+        sqsum = np.abs(flux_pe) + sqskyerr_pe + sqccderr_pe
         self.flux_pe_err = np.sqrt(sqsum)
 
         return flux_pe, self.flux_pe_err
@@ -98,7 +97,8 @@ class LCSim():
                         template_adu_err * gaussian_template)
 
         mask = (flux_obs_adu >= 0).astype(int)
-        sqerr_ran = (flux_obs_adu * mask - self.flux_adu) / self.simlib['gain']
+        sqerr_ran = np.abs((flux_obs_adu * mask - self.flux_adu) /
+                           self.simlib['gain'])
         sqsum = flux_adu_errSZ**2 + template_adu_err**2 + sqerr_ran
         flux_adu_errSZT = np.sqrt(sqsum)
 
@@ -119,12 +119,45 @@ class LCSim():
 
         return fluxcal, fluxcal_err
 
-    def simulate(self, generated_mag, simlib):
+    def simulate(self, generated_flux, simlib, unit='nJy'):
         """
+        Simulate observed flux and flux error for a given simulated magnitude
+        or flux
 
+        Parameters
+        ----------
+        generated_flux : ndarray
+            Array of generated fluxes or magnitude this should not have any
+            scatter other than model uncertainties, must have the same size as
+            `simlib`. generated_flux must be in the same order as the MJDs
+            in simlib.
+
+        simlib : pandas.DataFrame
+            DataFrame of observing logs created by SIMLIBReader.get_obs() file.
+
+        unit : str, optional
+            Unit of the input generated_flux. Currently supports:
+            `mag` (AB magnitudes), `nJy` (nano Jansky) or kessler (10^-11 Jy)
+
+        Returns
+        -------
+        fluxcal : ndarray
+            Flux array with image noise smear applied.
+
+        fluxcal_err : ndarray
+            Flux error array.
         """
-        self.genmag = generated_mag
         self.simlib = simlib
+
+        if unit == 'kessler':
+            self.flux_adu = generated_flux
+
+        elif unit == 'nJy':
+            zp_scale = 10**(-0.4*(31.4 - self.simlib['zps']))
+            self.flux_adu = generated_flux * zp_scale
+
+        elif unit == 'mag' or unit == 'ab':
+            self.flux_adu = 10.0**(0.4 * (self.simlib['zps'] - generated_flux))
 
         self.compute_statistical_error()
         return self.smear_generated_mag()
