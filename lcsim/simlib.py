@@ -39,8 +39,12 @@ class SIMLIBReader():
 
         If the SIMLIB file is not passed to the constructor it can be parsed at
         any point using the `load_simlib_file(simlib_file)` method.
+
+    reload_simlib : bool, optional
+        Flag specifying if the SIMLIB file should be fully reloaded into the
+        database even if it is already been found in the lcfit.db file.
     """
-    def __init__(self, simlib_file=None):
+    def __init__(self, simlib_file=None, reload_simlib=False):
         home_dir = os.path.expanduser('~')
         if not os.path.exists(home_dir + '/.lcsim'):
             os.mkdir(home_dir + '/.lcsim')
@@ -51,13 +55,17 @@ class SIMLIBReader():
 
         self.sqlalchemy_engine = sq.create_engine('sqlite:////'+lcsim_db_path)
 
+        self.survey = "None"
         self._ccd_field = [0, 'C0']
+        self._ra = -999
+        self._dec = -999
+        self._mwebv = 0.0
         self._source = [0, 0, 'n', 0, 0, 0, 0, 0, 0, 0, 0]
-        self._template = {'g': [0, 0], 'r': [0, 0], 'i': [0, 0], 'z': [0, 0]}
+        self._template = {}
 
         self.verify_checksum_table()
         if simlib_file is not None:
-            self.load_simlib_file(simlib_file)
+            self.load_simlib_file(simlib_file, reload_simlib)
 
     def __del__(self):
         self.conn.close()
@@ -70,7 +78,8 @@ class SIMLIBReader():
         CREATE TABLE IF NOT EXISTS checksum(
             hash varchar(32),
             file varchar(200),
-            table_name varchar(10)
+            table_name varchar(10),
+            survey varchar(10)
         )"""
         self.cur.execute(query)
         self.conn.commit()
@@ -108,16 +117,43 @@ class SIMLIBReader():
             sigzps float,
             mag float,
             zpt float,
-            skysigt float
+            skysigt float,
+            ra float,
+            dec float,
+            mwebv float
         )"""
         self.cur.execute(query)
         self.conn.commit()
 
-    def load_simlib_file(self, simlib_file):
+    def load_simlib_file(self, simlib_file, reload_simlib=False):
         """
-        Read and laod a SIMLIB file into the lcsim.db database file
+        Read and load a SIMLIB file into the lcsim.db database file. File is
+        first MD5 hashed and looked up in the database file. If exists it is
+        loaded unless reload=True in which case it is reloaded fully as in the
+        case where the file has not been found before.
+
+
+        Parameters
+        ----------
+        simlib_file : string
+            Path to the SIMLIB file to be loaded.
+
+        reload : bool, optional
+            Flag specifying if the table should be fully reloaded even if it is
+            already found in the lcfit.db file.
+
+        Returns
+        -------
+        None
         """
         checksum = hashlib.md5(open(simlib_file, 'rb').read()).hexdigest()
+
+        if reload_simlib is True:
+            query = """
+            DELETE FROM checksum where hash='{}'
+            """
+            self.cur.execute(query.format(checksum))
+            self.conn.commit()
 
         query = """\
         SELECT * FROM checksum WHERE hash='{}'
@@ -127,6 +163,7 @@ class SIMLIBReader():
 
         if len(res) != 0:
             self.simlib_table = res[0][2]
+            self.survey = res[0][3]
 
         else:
             self.simlib_table = 'simlib_' + checksum[0:10]
@@ -135,7 +172,10 @@ class SIMLIBReader():
             query = """\
             INSERT INTO checksum values{}
             """
-            insert_values = tuple([checksum, simlib_file, self.simlib_table])
+            insert_values = tuple([checksum,
+                                   simlib_file,
+                                   self.simlib_table,
+                                   self.survey])
             self.cur.execute(query.format(insert_values))
             self.conn.commit()
 
@@ -154,9 +194,22 @@ class SIMLIBReader():
         value : array-like
             Array of values corresponding to a given key
         """
-        if key == 'FIELD':
+        if key == 'SURVEY':
+            self.survey = value[0]
+            query = """\
+            UPDATE checksum SET survey='{}' WHERE table_name='{}'
+            """
+            self.cur.execute(query.format(self.survey, self.simlib_table))
+            self.conn.commit()
+
+            for flt in value[2]:
+                self._template[flt] = [0, 0]
+
+        elif key == 'FIELD':
             self._ccd_field[1] = value[0]
-            self._ccd_field[0] = value[3][1:-1]
+
+            if len(value) > 3:
+                self._ccd_field[0] = value[3][1:-1]
 
         elif key == 'TEMPLATE_ZPT':
             self._template['g'][0] = value[0]
@@ -170,45 +223,102 @@ class SIMLIBReader():
             self._template['i'][1] = value[2]
             self._template['z'][1] = value[3]
 
+        elif key == 'RA':
+            self._ra = value[0]
+            self._dec = value[2]
+
+            if len(value) > 6:
+                self._mwebv = value[6]
+
         elif key == 'S':
             self._source = value
-            self._source[6] = np.round(float(self._source[6])*np.pi/2, 2)
+
+            if self.survey == 'DES':
+                self._source[6] = np.round(float(self._source[6])*np.pi/2, 2)
+
+    def assign_ccd_from_ra_dec(self):
+        """
+        Assign a CCD value for a unique pair of RA and DEC in the SIMLIB file.
+        This is essentilly used as an index for the obslog for SDSS.
+        """
+        for field in self.get_fields():
+            ccd = 1
+            for pair in self.get_ccd_ra_dec(field).values:
+                query = """
+                UPDATE {} SET ccd={} WHERE field='{}' AND ra={} AND dec={}
+                """
+                self.cur.execute(query.format(self.simlib_table,
+                                              ccd,
+                                              field,
+                                              pair[1],
+                                              pair[2]))
+                ccd += 1
+
+            self.conn.commit()
 
     def create_current_simlib_table(self):
         """
-        Remove duplicated entried in the lcsim.db table then set an index on
-        the new table to improve query performance and finally remove the
-        temporary table.
+        Depending on which survey is being used either remove duplicated
+        entried (DES) or rename the 'temp' table to the correct simlim_CHECKSUM
+        name in the lcsim.db. Tables are also indexed here to improve query
+        performance. Finally temporary tables are removed.
         """
-        query = """\
-        CREATE TABLE IF NOT EXISTS {} AS
-            SELECT
-                ccd,
-                field,
-                max(mjd) AS mjd,
-                idexpt,
-                flt,
-                max(gain) AS gain,
-                max(noise) AS noise,
-                max(skysigs) AS skysigs,
-                max(psf1) AS psf1,
-                max(psf2) AS psf2,
-                max(psfratio) AS psfratio,
-                max(zps) AS zps,
-                max(sigzps) AS sigzps,
-                max(zpt) AS zpt,
-                max(skysigt) AS skysigt
-            FROM temp
-            GROUP BY ccd, field, idexpt, flt
+
+        query = """
+        DROP TABLE IF EXISTS {}
         """
         self.cur.execute(query.format(self.simlib_table))
         self.conn.commit()
 
+        if self.survey == 'DES':
+            query = """\
+            CREATE TABLE IF NOT EXISTS {} AS
+                SELECT
+                    ccd,
+                    field,
+                    max(mjd) AS mjd,
+                    idexpt,
+                    flt,
+                    max(gain) AS gain,
+                    max(noise) AS noise,
+                    max(skysigs) AS skysigs,
+                    max(psf1) AS psf1,
+                    max(psf2) AS psf2,
+                    max(psfratio) AS psfratio,
+                    max(zps) AS zps,
+                    max(sigzps) AS sigzps,
+                    max(zpt) AS zpt,
+                    max(skysigt) AS skysigt,
+                    sum(ra) / count(ra) AS ra,
+                    sum(dec) / count(dec) AS dec,
+                    max(mwebv) as mwebv
+                FROM temp
+                GROUP BY ccd, field, idexpt, flt
+            """
+
+        else:
+            query = """
+            ALTER TABLE temp RENAME TO {}
+            """
+
+        self.cur.execute(query.format(self.simlib_table))
+        self.conn.commit()
+
         index = """
-        CREATE INDEX search_query
+        CREATE INDEX ra_dec_{}
+            ON {}(ra, dec)
+        """
+        self.cur.execute(index.format(self.simlib_table, self.simlib_table))
+        self.conn.commit()
+
+        if self.survey == 'SDSS':
+            self.assign_ccd_from_ra_dec()
+
+        index = """
+        CREATE INDEX search_query_{}
             ON {}(field, ccd, mjd, flt)
         """
-        self.cur.execute(index.format(self.simlib_table))
+        self.cur.execute(index.format(self.simlib_table, self.simlib_table))
         self.conn.commit()
 
         self.cur.execute("DROP TABLE IF EXISTS temp")
@@ -222,7 +332,7 @@ class SIMLIBReader():
         query = """\
         INSERT INTO temp (
             ccd,field,mjd,idexpt,flt,gain,noise,skysigs,psf1,psf2,psfratio,
-            zps,sigzps,mag,zpt,skysigt
+            zps,sigzps,mag,zpt,skysigt,ra,dec,mwebv
         ) VALUES{}
         """
 
@@ -238,11 +348,93 @@ class SIMLIBReader():
                     insert_values = (
                         tuple(self._ccd_field) +
                         tuple(self._source) +
-                        tuple(self._template[self._source[2]])
+                        tuple(self._template[self._source[2]]) +
+                        (self._ra, self._dec, self._mwebv)
                     )
                     self.cur.execute(query.format(insert_values))
 
         self.conn.commit()
+
+    def get_fields(self):
+        """
+        Get a list of unique fields available in the SIMLIB file
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        fields : numpy.array
+            Array of unique fields found in the SIMLIB file
+        """
+        query = """\
+            SELECT DISTINCT field
+            FROM {}
+            ORDER BY field asc
+        """
+        query = query.format(self.simlib_table)
+
+        res = pd.read_sql_query(query, self.sqlalchemy_engine)
+        res = res[res['field'] != '']
+        return res['field'].values
+
+    def get_ccds(self, field):
+        """
+        Get a list of unique CCDs available for a given field in the
+        SIMLIB file.
+
+        Parameters
+        ----------
+        field : str
+            Observing field to be searched for available CCDs
+
+        Returns
+        -------
+        ccds : numpy.array
+            Array of unique CCDs found for the input field in the SIMLIB file
+        """
+        query = """\
+            SELECT DISTINCT ccd
+            FROM {}
+            WHERE field = '{}'
+            ORDER BY ccd
+        """
+        query = query.format(self.simlib_table, field)
+
+        res = pd.read_sql_query(query, self.sqlalchemy_engine)
+        if not np.issubdtype(res['ccd'].dtype, np.number):
+            res = res[res['ccd'] != '']
+
+        return res['ccd'].values
+
+    def get_ccd_ra_dec(self, field):
+        """
+        Get the RA and DEC associated with each CCD number. For DES this is
+        approximately the central RA and DEC of each CCD while for SDSS, where
+        the CCD number are made up values used as indexes for RA and DEC, this
+        is a usuful look up table for the number and range of available CCD
+        values.
+
+        Parameters
+        ----------
+        field : str
+            observing field to be searched for available CCDs
+
+        Returns
+        -------
+        ccd_ra_dec : Pandas.DataFrame
+            DataFrame object containing unique CCD numbers and their
+            corresponding RA and DEC values.
+        """
+        query = """\
+            SELECT DISTINCT ccd, ra, dec
+            FROM {}
+            WHERE field = '{}'
+            ORDER BY ccd, ra asc
+        """
+        query = query.format(self.simlib_table, field)
+        return pd.read_sql_query(query, self.sqlalchemy_engine)
 
     def get_obslog(self, field, ccd, band=None, min_mjd=None, max_mjd=None):
         """
@@ -282,7 +474,13 @@ class SIMLIBReader():
         max_mjd_str = ""
 
         if band is not None:
-            band_str = 'AND flt="' + str(band) + '"'
+            if type(band) == str:
+                band = [band]
+
+            band_str = 'AND flt in ('
+            for flt in band:
+                band_str = band_str + '"' + str(flt) + '",'
+            band_str = band_str[:-1] + ')'
 
         if min_mjd is not None:
             min_mjd_str = 'AND mjd>' + str(min_mjd)
@@ -296,4 +494,5 @@ class SIMLIBReader():
                              band_str,
                              min_mjd_str,
                              max_mjd_str)
+
         return pd.read_sql_query(query, self.sqlalchemy_engine)
