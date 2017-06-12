@@ -497,4 +497,7 @@ class SIMLIBReader():
                              min_mjd_str,
                              max_mjd_str)
 
-        return pd.read_sql_query(query, self.sqlalchemy_engine)
+        obslog = pd.read_sql_query(query, self.sqlalchemy_engine)
+        obslog.survey = self.survey
+
+        return obslog
