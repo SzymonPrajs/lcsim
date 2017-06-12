@@ -14,8 +14,42 @@ class LCSim():
     seed : int, optional
         Seed for random number generators used thoughout the class
     """
-    def __init__(self, seed=0):
-        self.seed = seed
+    def __init__(self, seed=None):
+        if seed is not None:
+            np.random.seed(seed)
+
+    def psf_area(self):
+        """
+        Calculate the area of the effective area of the PSF
+        Properties
+        ----------
+        psf1 : float
+            First axis of the PSF
+
+        psf2 : float
+            Second axis of the PSF
+
+        psfratio : float
+            Ratio between the two psf axis
+
+        Returns
+        -------
+        area_bg : float
+            Area of the background
+        """
+        if ((self.simlib['psfratio'][0] < 1e-5) or
+           (self.simlib['psf2'][0] < 1e-4)):
+            return 4.0 * np.pi * self.simlib['psf1']**2
+
+        else:
+            tmp = (self.simlib['psfratio'] * (self.simlib['psf2']**2) /
+                   (self.simlib['psf1']**2))
+            a1 = 1.0 / (1.0 + tmp)
+            a2 = 1.0 - a1
+            tmp = ((a1 * self.simlib['psf2'] / self.simlib['psf1']) +
+                   (a2 * self.simlib['psf1'] / self.simlib['psf2']))
+            return 4.0 * np.pi * (((self.simlib['psf2']**2) *
+                                  (self.simlib['psf1']**2)) / (1.0 + tmp**2))
 
     def compute_statistical_error(self):
         """
@@ -32,16 +66,18 @@ class LCSim():
 
         flux_pe = self.flux_adu * self.simlib['gain']
 
-        area_bg = 4.0 * np.pi * self.simlib['psf1']**2
+        area_bg = self.psf_area()
 
         sqskyerr_pe = area_bg*(self.simlib['skysigs'] * self.simlib['gain'])**2
         sqccderr_pe = area_bg * self.simlib['noise']**2
 
-        template_sqskyerr_pe = area_bg * (self.simlib['skysigt'] *
-                                          self.simlib['gain'])**2
-        zfac = 10.0**(0.8*(self.simlib['zps'] - self.simlib['zpt']))
-        template_sqskyerr_pe *= zfac
-        self.template_pe_err = np.sqrt(template_sqskyerr_pe)
+        self.template_pe_err = np.zeros_like(self.simlib['skysigt'])
+        if self.simlib.survey == 'DES':
+            template_sqskyerr_pe = area_bg * (self.simlib['skysigt'] *
+                                              self.simlib['gain'])**2
+            zfac = 10.0**(0.8*(self.simlib['zps'] - self.simlib['zpt']))
+            template_sqskyerr_pe *= zfac
+            self.template_pe_err = np.sqrt(template_sqskyerr_pe)
 
         sqsum = np.abs(flux_pe) + sqskyerr_pe + sqccderr_pe
         self.flux_pe_err = np.sqrt(sqsum)
@@ -64,15 +100,17 @@ class LCSim():
         }
 
         field = self.simlib['field'].values[0]
-        band = self.simlib['flt'].values[0]
         if field == 'C3' or field == 'X3':
             Pol = DPol
         else:
             Pol = SPol
 
-        scale = 0.0
+        poly_index = self.simlib['flt'].map(Pol)
+        poly_index = np.array([np.array(poly_row) for poly_row in poly_index])
+        scale = np.zeros(poly_index.shape[0])
         for i in range(5):
-            scale += Pol[band][i] * self.simlib['psf1']**i
+            scale += poly_index[:, i] * self.simlib['psf1']**i
+
         return scale
 
     def smear_generated_mag(self):
@@ -105,9 +143,10 @@ class LCSim():
         sqsum = flux_adu_errS**2 + template_adu_err**2 + sqerr_ran
         errstat = np.sqrt(sqsum)
 
-        scale_flux_err = self.scale_fluxerr_model()
-        flux_adu_errSZT *= scale_flux_err
-        errstat *= scale_flux_err
+        if self.simlib.survey == 'DES':
+            scale_flux_err = self.scale_fluxerr_model()
+            flux_adu_errSZT *= scale_flux_err
+            errstat *= scale_flux_err
 
         zp_scale = 10**(-0.4*(self.simlib['zps'] - 31.4))
         fluxcal = flux_obs_adu * zp_scale
