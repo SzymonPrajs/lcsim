@@ -464,7 +464,9 @@ class SIMLIBReader():
         Returns
         -------
         obslog : Pandas.DataFrame
-            `Pandas.DataFrame` returning the observation logs.
+            `Pandas.DataFrame` returning the observation logs. The returned
+            object contains the survey nama as a metadata object that can be
+            accessed though obslog.survey
         """
         query = """\
             SELECT * FROM {} WHERE field="{}" AND ccd={} {} {} {}
