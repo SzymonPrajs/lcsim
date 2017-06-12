@@ -449,9 +449,9 @@ class SIMLIBReader():
             CCD number, must be provided as each CCD has a different set of
             observation log parameters.
 
-        band : str, optional
-            Name of an observed filter. If specified the observing log will be
-            returned only for this band.
+        band : str or array-like, optional
+            Names of observing filters. If specified the observing log will be
+            returned only for these bands.
 
         min_mjd : float, optional
             Lower limit for the returned MJD, can be used to create light
